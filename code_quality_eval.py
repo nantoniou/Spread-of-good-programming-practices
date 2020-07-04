@@ -35,17 +35,18 @@ def search(hash, type):
 		return splitted[1], splitted[2], int(splitted[-1].split()[0])
 	return out
 
+# files used in continuous integration
+ci_files = [
+	'\.gitlab\-ci\.yml', '\.travis\.yml', 'Jenkinsfile', 'buddy\.yml', '\.drone\.yml',
+	'circle\.yml', '\.circleci', 'bamboo\.yaml', 'codeship\-steps\.yml', '\.teamcity',
+	'wercker\.yml', 'appveyor\.yml', 'bitrise\.yml', 'codefresh\.yml', 'solano\.yml',
+	'shippable\.yml', 'phpci\.yml', 'cloudbuild\.yaml'
+]
+
 def ci_lookup(tree_hash):
 	"""
 	Method used to check the usage of Continuous Integration in a tree, given its hash.
-	"""
-	# files used in continuous integration
-	ci_files = [
-		'\.gitlab\-ci\.yml', '\.travis\.yml', 'Jenkinsfile', 'buddy\.yml', '\.drone\.yml',
-		'circle\.yml', '\.circleci', 'bamboo\.yaml', 'codeship\-steps\.yml', '\.teamcity',
-		'wercker\.yml', 'appveyor\.yml', 'bitrise\.yml', 'codefresh\.yml', 'solano\.yml',
-		'shippable\.yml', 'phpci\.yml', 'cloudbuild\.yaml'
-	]
+	"""	
 	query = 'echo ' + tree_hash + ' | ~/lookup/showCnt tree | grep "' + '\|'.join(ci_files) +'"'
 	out = bash(query)
 	
@@ -64,16 +65,10 @@ def ci_lookup(tree_hash):
 	"""
 	return bool(out)
 
-# df218f99b872ef59fd51952709c00903545cbb3f ex. CI commit hash
-
 authors={}
 
-def calc_CI_introductions(author):
-	# getting the author's commits
-	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
+def calc_CI_introductions(commits):
 
-	commits = [x for x in out.strip().split(';')[1:]]
-	
 	# using a dictionary that has the commits' hashes as keys,
 	# so as to not search multiple times for the same commit
 	CI_checked = {}
@@ -114,7 +109,7 @@ def calc_CI_introductions(author):
 		if CI_checked[tree_hash] and not all_parent_CI:
 			
 			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
-			main_proj = out.split(';')[1]
+			main_proj = out.strip().split(';')[1]
 			f = open("introductions.csv", "a")
 			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj)
 			f.close()
@@ -124,9 +119,25 @@ def calc_CI_introductions(author):
 				
 			if authors[author][0] == 1 or time < authors[author][1]:
 				authors[author][1] = time"""
-			print authors
 
 	print (current_time()-start_time)/len(commits), 'seconds per commit'
+
+def calc_CI_modif(commits):
+	commits = ["d1b16321e2b366d2da1db749758d383acac9bd55"]
+	for commit in commits:
+		# c2f does seems to result in a tie error, so c2b and b2f is used instead
+		out = bash("echo " + commit + " | ~/lookup/getValues c2b")
+		blobs = out.strip().split(";")[1:]
+		
+		query = ("for x in $(echo " + commit + " | ~/lookup/getValues c2b |" +
+					" awk -v RS='[;\\n]' 1 |" +
+					" tail -n+2); do" +
+				" echo $x | ~/lookup/getValues b2f;" +
+			" done |" +
+			" cut -d ';' -f2 |" +
+			" grep '" + "\|".join(ci_files) + "'")
+		print query
+
 
 def find_links(author, end_time, method='sh'):
 	"""
@@ -146,6 +157,15 @@ def find_links(author, end_time, method='sh'):
 			for row in rows:
 				print row
 
+def calculate_metrics(author):
+	# getting the author's commits
+	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
+	commits = [x for x in out.strip().split(';')[1:]]
+	
+	#calc_CI_introductions(commits)
+	calc_CI_modif(commits)
+	
+
 # checking whether the user provided the author
 if len(sys.argv) > 1:
 	# initialize the number of CI integrations and the time
@@ -153,6 +173,4 @@ if len(sys.argv) > 1:
 else:
 	sys.exit('No author provided')
 for author in authors:
-	#find_links(author, current_time())
-	calc_CI_introductions(author)
-
+	calculate_metrics(author)
