@@ -65,9 +65,10 @@ def ci_lookup(tree_hash):
 	"""
 	return bool(out)
 
-authors={}
-
-def calc_CI_introductions(commits):
+def calc_CI_introductions(commits, author):
+	"""
+	Alternative way to check_if_introduction, to compare performance.
+	"""
 
 	# using a dictionary that has the commits' hashes as keys,
 	# so as to not search multiple times for the same commit
@@ -81,7 +82,7 @@ def calc_CI_introductions(commits):
 	for count, commit in enumerate(commits):
 		# status update
 		if count % 50 == 0:
-			print count, ' / ', len(commits) 
+			print count, ' / ', len(commits) - 1
 	
 		tree_hash, parent_commit_hash, time = search(commit, 'commit')
 		if tree_hash not in CI_checked:
@@ -111,32 +112,79 @@ def calc_CI_introductions(commits):
 			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
 			main_proj = out.strip().split(';')[1]
 			f = open("introductions.csv", "a")
-			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj)
+			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj + '\n')
 			f.close()
 			print 'wrote'
-			
-			"""	authors[author][0] += 1
-				
-			if authors[author][0] == 1 or time < authors[author][1]:
-				authors[author][1] = time"""
-
 	print (current_time()-start_time)/len(commits), 'seconds per commit'
 
-def calc_CI_modif(commits):
-	commits = ["d1b16321e2b366d2da1db749758d383acac9bd55"]
-	for commit in commits:
-		# c2f does seems to result in a tie error, so c2b and b2f is used instead
-		out = bash("echo " + commit + " | ~/lookup/getValues c2b")
-		blobs = out.strip().split(";")[1:]
+def check_if_introduction(commit, result):
+	"""
+	We check the parent commit to see if its child commit introduced or modified a CI config file.
+	"""
+	tree_hash, parent_commit_hash, time = search(commit, 'commit')
+	
+	# controlling for the case of no parent commits
+	if parent_commit_hash == '':
+		return True
+
+	# controlling for the case of multiple parent commits
+	all_parent_CI = False
+	for parent in parent_commit_hash.split(':'):
+
+		parent_tree_hash = search(parent, 'commit')[0]
+		parent_CI = ci_lookup(parent_tree_hash)
+			
+		# checking all the parent commits for the usage of CI
+		all_parent_CI = all_parent_CI or parent_CI
 		
+	# if the tree has a CI file, while the parent tree does not, it is an introduction
+	return not all_parent_CI
+
+	
+def calc_CI(commits, author):
+	"""
+	Used to investigate how many commits, from a user, modified a CI configuration file.
+	We use unix commands to achieve a better performance.
+	"""
+	# delete contents
+	open('modifications.csv', 'w').close()
+	open('introductions.csv', 'w').close()
+
+	for count, commit in enumerate(commits):
+		# status update
+		#if (count + 1) % 50 == 0:
+		print commit, '..   ..', count + 1, ' / ', len(commits)
+
+		# c2f does seems to result in a tie error, so c2b and b2f is used instead		
+		#getting the blobs
 		query = ("for x in $(echo " + commit + " | ~/lookup/getValues c2b |" +
+					# splitting on the semicolon and discarding the newlines
 					" awk -v RS='[;\\n]' 1 |" +
+					# discarding the commit's hash (it appears before the blobs' hashes)
 					" tail -n+2); do" +
-				" echo $x | ~/lookup/getValues b2f;" +
+				# for each blob, we look up it's filename
+				" echo $x | ~/lookup/getValues b2f;" + 
 			" done |" +
+			# we discard the first field of the results (blobs' hash)
 			" cut -d ';' -f2 |" +
-			" grep '" + "\|".join(ci_files) + "'")
-		print query
+			# we check whether one of the modified files is a CI configuration file
+			" grep '" + "\|".join(ci_files) +"'")
+		result = bash(query)
+		if result:
+			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
+			main_proj = out.strip().split(';')[1]
+			time = search(commit, 'commit')[2]
+				
+			if check_if_introduction(commit, result):
+				f = open("introductions.csv", "a")
+				print 'introduction'
+			else:
+				f = open("modifications.csv", "a")
+				print 'modification'
+			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj + '\n')
+			f.close()
+			print 'wrote: -->', commit
+			
 
 
 def find_links(author, end_time, method='sh'):
@@ -162,15 +210,12 @@ def calculate_metrics(author):
 	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
 	commits = [x for x in out.strip().split(';')[1:]]
 	
-	#calc_CI_introductions(commits)
-	calc_CI_modif(commits)
+	calc_CI(commits, author)
 	
 
 # checking whether the user provided the author
-if len(sys.argv) > 1:
-	# initialize the number of CI integrations and the time
-	authors[sys.argv[1]] = [0, 0]
-else:
+if len(sys.argv) == 1:
 	sys.exit('No author provided')
-for author in authors:
-	calculate_metrics(author)
+
+calculate_metrics(sys.argv[1])
+#calc_CI(['bfb1c6715b5b5698b599ab5e54e5c87d46128679'], sys.argv[1])
