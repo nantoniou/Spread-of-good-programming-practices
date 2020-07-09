@@ -2,6 +2,7 @@ import sys
 import os
 sys.path.insert(0, '../oscar.py')
 
+import re
 from oscar import Project
 from oscar import Time_project_info as Proj
 import subprocess
@@ -81,8 +82,8 @@ def calc_CI_introductions(commits, author):
 	# that did not exist in the parent commit
 	for count, commit in enumerate(commits):
 		# status update
-		if count % 50 == 0:
-			print count, ' / ', len(commits) - 1
+		if (count + 1) % 50 == 0:
+			print count + 1, ' / ', len(commits)
 	
 		tree_hash, parent_commit_hash, time = search(commit, 'commit')
 		if tree_hash not in CI_checked:
@@ -152,8 +153,8 @@ def calc_CI(commits, author):
 
 	for count, commit in enumerate(commits):
 		# status update
-		#if (count + 1) % 50 == 0:
-		print commit, '..   ..', count + 1, ' / ', len(commits)
+		if (count + 1) % 50 == 0:
+			print commit, '..   ..', count + 1, ' / ', len(commits)
 
 		# c2f does seems to result in a tie error, so c2b and b2f is used instead		
 		#getting the blobs
@@ -184,8 +185,44 @@ def calc_CI(commits, author):
 			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj + '\n')
 			f.close()
 			print 'wrote: -->', commit
-			
 
+def calc_CI_diff(commits, author):
+	"""
+	Method written as a faster alternative to calc_CI. It seems to be 30 times faster.
+	"""
+	# delete contents
+	open('modifications.csv', 'w').close()
+	open('introductions.csv', 'w').close()
+
+	for count, commit in enumerate(commits):
+		#status update
+		if (count + 1) % 50 == 0:
+			print commit, '..   ..', count + 1, ' / ', len(commits)
+
+		# cmputeDiff2.perl seems to produce junk to the stdout occasionally
+		diff = bash("echo " + commit + " | ssh da4 ~/lookup/cmputeDiff2.perl")
+
+		# if a CI configuration file is in the diff
+		if re.search("|".join(ci_files), diff):
+			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
+			main_proj = out.strip().split(';')[1]
+			time = search(commit, 'commit')[2]
+
+			for blob in diff.split():
+				# looking for the CI config blob and checking if parent blob exists
+				if re.search("|".join(ci_files), blob):
+					# if we have both an introduction and a modification
+					# in the same commit, we count it as an introduction
+					if blob.endswith(';'):
+						f = open("introductions.csv", "a")
+						print 'introduction'
+					else:
+						f = open("modifications.csv", "a")
+						print 'modification'
+					break
+			f.write(author + ', ' + 'CI' + ', ' + str(time) + ', ' + main_proj + '\n')
+			f.close()
+			print 'wrote: -->', commit
 
 def find_links(author, end_time, method='sh'):
 	"""
@@ -205,12 +242,27 @@ def find_links(author, end_time, method='sh'):
 			for row in rows:
 				print row
 
+def calc_test(commits, author):
+	for count, commit in enumerate(commits):
+		# status update
+		if (count + 1) % 50 == 0:
+			print commit, '..   ..', count + 1, ' / ', len(commits)
+
+		for blob in bash('echo ' + commit + ' | ~/lookup/getValues c2b').split(';')[1:]:
+			pass
+
+
 def calculate_metrics(author):
 	# getting the author's commits
 	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
 	commits = [x for x in out.strip().split(';')[1:]]
 	
+	time1 = current_time()
 	calc_CI(commits, author)
+	time2 = current_time()
+	print 'without diff time is ' + str(time2 - time1)
+	calc_CI_diff(commits, author)
+	print 'with is ' + str(current_time() - time2)
 	
 
 # checking whether the user provided the author
