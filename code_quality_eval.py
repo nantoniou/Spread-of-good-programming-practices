@@ -27,9 +27,9 @@ def search(hash, type):
 	"""
 	out = bash('echo ' + hash + ' | ~/lookup/showCnt ' + type)
 	
-#	if type == 'tree':
-#		return [blob.split(';') for blob in out.strip().split('\n')]
-	if type == 'commit':#elif
+	if type == 'tree':
+		return [blob.split(';') for blob in out.strip().split('\n')]
+	if type == 'commit':
 		splitted = out.split(';')
 		# the tree and parent commit hashes are the second and third word, respectively
 		# the commit time is the last word, from which we discard the timezone and cast it to int
@@ -48,7 +48,7 @@ def ci_lookup(tree_hash):
 	"""
 	Method used to check the usage of Continuous Integration in a tree, given its hash.
 	"""	
-	query = 'echo ' + tree_hash + ' | ~/lookup/showCnt tree | grep "' + '\|'.join(ci_files) +'"'
+	query = 'echo ' + tree_hash + ' | ~/lookup/showCnt tree | egrep "' + '|'.join(ci_files) +'"'
 	out = bash(query)
 	
 	"""
@@ -145,7 +145,7 @@ def check_if_introduction(commit, result):
 def calc_CI(commits, author):
 	"""
 	Used to investigate how many commits, from a user, modified a CI configuration file.
-	We use unix commands to achieve a better performance.
+	Unix commands are used for a better performance.
 	"""
 	# delete contents
 	open('modifications.csv', 'w').close()
@@ -159,17 +159,17 @@ def calc_CI(commits, author):
 		# c2f does seems to result in a tie error, so c2b and b2f is used instead		
 		#getting the blobs
 		query = ("for x in $(echo " + commit + " | ~/lookup/getValues c2b |" +
-					# splitting on the semicolon and discarding the newlines
-					" awk -v RS='[;\\n]' 1 |" +
-					# discarding the commit's hash (it appears before the blobs' hashes)
-					" tail -n+2); do" +
+			# splitting on the semicolon and discarding the newlines
+			" awk -v RS='[;\\n]' 1 |" +
+			# discarding the commit's hash (it appears before the blobs' hashes)
+			" tail -n+2); do" +
 				# for each blob, we look up it's filename
 				" echo $x | ~/lookup/getValues b2f;" + 
 			" done |" +
 			# we discard the first field of the results (blobs' hash)
 			" cut -d ';' -f2 |" +
 			# we check whether one of the modified files is a CI configuration file
-			" grep '" + "\|".join(ci_files) +"'")
+			" egrep '" + "|".join(ci_files) + "'")
 		result = bash(query)
 		if result:
 			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
@@ -230,10 +230,8 @@ def find_links(author, end_time, method='sh'):
 	affected the given author's use of good coding practices.
 	A timestamp is also given to define the time till which we find the connections.
 	"""
-	out = bash('echo "'+ author + '" | ~/lookup/getValues a2p')
+	out = bash('echo "'+ author + '" | ~/lookup/getValues a2P')
 	pr = [x for x in out.strip().split(';')[1:]]
-	
-	#TODO handle forks
 	
 	if method == 'pr_timeline':		
 		p = Proj()
@@ -242,14 +240,89 @@ def find_links(author, end_time, method='sh'):
 			for row in rows:
 				print row
 
+#### Start building the regular expression that will be used to search for unit testing libraries,
+#### in the commit's blobs ####
+# Java
+java_lib = ['io.restassured', 'org.openqa.selenium', 'org.spockframework', 'jtest',
+	'org.springframework.test', 'org.dbunit', 'org.jwalk', 'org.mockito', 'org.junit']
+java_regex = (['import\s+'+s.replace('.', '\.') for s in java_lib])
+java_all_reg = '|'.join(java_regex)
+
+# Perl
+perl_all_reg = 'use\s+Test::'
+
+# Javascript
+js = ['assert', 'mocha', 'jasmine', 'ava', 'jest', 'karma', 'storybook', 'tape',
+	'cypress', 'puppeteer', 'chai', 'qunit', 'sinon', 'casper', 'buster']
+js_regex = (["require\([\\\'\\\"]" + s + "[\\\'\\\"]\)" for s in js])
+js_all_reg = '|'.join(js_regex)
+# C#
+c_sharp = ['NUnit', 'Microsoft\.VisualStudio\.TestTools\.UnitTesting',
+		'Xunit', 'csUnit', 'MbUnit']
+c_sharp_regex = (["using\s+" + s for s in c_sharp])
+c_sharp_all_reg = '|'.join(c_sharp_regex)
+
+# C and C++
+c = ['cmocka', 'unity', 'CppuTest', 'embUnit', 'CUnit', 'CuTest', 'check',
+	'gtest', 'uCUnit', 'munit', 'minunit', 'acutest', 'boost/test',
+	'UnitTest\+\+', 'cpptest', 'cppunit', 'catch', 'bandit', 'tut']
+c_regex = (['#include\s+[<\\\"]' + s + '\.h[>\\\"]'for s in c])
+c_all_reg = '|'.join(c_regex)
+# PHP
+php = ['PHPUnit', 'Codeception', 'Behat', 'PhpSpec', 'Storyplayer', 'Peridot',
+	'atoum', 'Kahlan', 'vendor/EnhanceTestFramework']
+php_regex = (['(include|require|use).+' + s for s in php])
+php_all_reg = '|'.join(php_regex)
+
+# Python
+python = ['pytest', 'unittest', 'doctest', 'testify', 'nose', 'hypothesis']
+python_regex = (['import\s+'+lib+'|from\s+'+lib+'\s+import' for lib in python])
+python_all_reg = '|'.join(python_regex)
+
+all_reg = [java_all_reg, perl_all_reg, js_all_reg, c_sharp_all_reg, c_all_reg, php_all_reg, python_all_reg]
+final_reg = '|'.join(all_reg)
+#### End of regex building ####
+
 def calc_test(commits, author):
+	"""
+	Used to investigate how many commits, from a user, modified a unit testing file.
+	Unix commands are used to achieve a better performance.
+	The blobs are parsed, looking for unit testing library imports. An alternative would
+	be using the thruMaps directories or the ClickHouse API, but those options seem slower.
+	"""
+	commits = ['598c7ec797d32d6a1b60ef305f48b2e8e7e43c85']
+	open('modifications.csv', 'w').close()
+	
 	for count, commit in enumerate(commits):
 		# status update
-		if (count + 1) % 50 == 0:
+		if (count + 1) % 5 == 0:
 			print commit, '..   ..', count + 1, ' / ', len(commits)
 
-		for blob in bash('echo ' + commit + ' | ~/lookup/getValues c2b').split(';')[1:]:
-			pass
+			# getting every blob from a given commit
+		query = ('for x in $(echo ' + commit + ' | ~/lookup/getValues c2b | ' +
+			# splitting it and discarding the newlines and the commit's hash
+			'awk -v RS="[;\\n]" 1 | tail -n+2); do ' +
+			# We look up the content's of each blob, and discard the STDERR,
+			# in the case of trying to look up a blob that does not exist in the database
+			'echo $x | ~/lookup/showCnt blob 2> /dev/null; done | ' +
+			# We search for the use of a unit testing library, using the above regex, and
+			# keeping the first result only, since that is enough to know that the commit contains
+			# a unit testing file, to make the execution faster
+			'egrep -m 1 "' + final_reg + '"')
+		if bash(query): # if contains unit testing lib
+			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
+			main_proj = out.strip().split(';')[1]
+			time = search(commit, 'commit')[2]
+
+			# at this point we could search the parent's tree for the existence of tests, but this
+			# would require recursively looking at every directory and parsing every file in the tree, so, due
+			# to the complexity, we skip it and consider it a modification instead of a possible introduction
+
+			f = open("modifications.csv", "a")
+			print 'modification'
+			f.write(author + ', ' + 'TEST' + ', ' + str(time) + ', ' + main_proj + '\n')
+			f.close()
+			print 'wrote: -->', commit
 
 
 def calculate_metrics(author):
@@ -257,13 +330,13 @@ def calculate_metrics(author):
 	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
 	commits = [x for x in out.strip().split(';')[1:]]
 	
-	time1 = current_time()
-	calc_CI(commits, author)
-	time2 = current_time()
-	print 'without diff time is ' + str(time2 - time1)
-	calc_CI_diff(commits, author)
-	print 'with is ' + str(current_time() - time2)
-	
+	#time1 = current_time()
+	#calc_CI(commits, author)
+	#time2 = current_time()
+	#print 'without diff time is ' + str(time2 - time1)
+	#calc_CI_diff(commits, author)
+	#print 'with is ' + str(current_time() - time2)
+	calc_test(commits, author)
 
 # checking whether the user provided the author
 if len(sys.argv) == 1:
