@@ -214,6 +214,8 @@ def calc_CI_diff(commits, author):
 					# if we have both an introduction and a modification
 					# in the same commit, we count it as an introduction
 					if blob.endswith(';'):
+					# if we don't have the parent blob, after the last semicolon,
+					# it is an introduction
 						f = open("introductions.csv", "a")
 						print 'introduction'
 					else:
@@ -290,7 +292,6 @@ def calc_test(commits, author):
 	The blobs are parsed, looking for unit testing library imports. An alternative would
 	be using the thruMaps directories or the ClickHouse API, but those options seem slower.
 	"""
-	commits = ['598c7ec797d32d6a1b60ef305f48b2e8e7e43c85']
 	open('modifications.csv', 'w').close()
 	
 	for count, commit in enumerate(commits):
@@ -325,6 +326,57 @@ def calc_test(commits, author):
 			print 'wrote: -->', commit
 
 
+def calc_lang_features(commits, author):
+	"""
+	Method used to count the usage of certain languages' good practices and modern approaches.
+	We parse the diff of a modified file and the content of an introduced file, in order to find those
+	practices, and we count the extent of the usage. Then, we write to a file, for each commit that
+	included these features.
+	"""
+	lang_features = ['/\*\*', '\\"\\"\\"', '///', # documentation
+			'^\s*@', 'def.+:.+->', 'using\s+System\.ComponentModel\.DataAnnotations', # assertion
+			'assert', 'TODO', 'lambda']
+
+	# delete contents
+	open('lang_features.csv', 'w').close()
+	
+	for count, commit in enumerate(commits):
+		# status update
+		if (count + 1) % 5 == 0:
+			print commit, '..   ..', count + 1, ' / ', len(commits)
+
+
+			# for each blob modified
+		query = ("for x in $(echo " + commit + " | ssh da4 ~/lookup/cmputeDiff2.perl); do " +
+				# get the chold and parent blob
+				"diff_blobs=$(echo $x | awk -v RS=';' 1 | sed -n '3,4 p');" +
+				# if a parent blob does not exist, the author authored all of the content of the file
+				"if [ $(echo $diff_blobs|wc -w) -eq 1 ]; then " +
+					"echo $diff_blobs | ~/lookup/showCnt blob 2> /dev/null; " +
+				# if a parent blob exists, find the diff, in order to search only the modified lines
+				"elif [ $(echo $diff_blobs|wc -w) -eq 2 ]; then " +
+					"vars=( $diff_blobs );" +
+					# using bash instead of sh in order to use the process substitution,
+					# to get the modified lines
+					"/bin/bash -c \"diff <(echo ${vars[0]} | ~/lookup/showCnt blob)" +
+								" <(echo ${vars[1]} | ~/lookup/showCnt blob)\";" +
+				"fi;" +
+			# grep the above practices and discard the lines that were deleted from the parent blob
+			# (they start with ">" in diff)
+			"done | egrep \"" + "|".join(lang_features) + "\" | grep -v '^>' | wc -l ")
+		count_uses = int(bash(query).strip())
+		if count_uses > 0: # good practice feature is used
+			out = bash('echo ' + commit + ' | ~/lookup/getValues c2P')
+			main_proj = out.strip().split(';')[1]
+			time = search(commit, 'commit')[2]
+
+			f = open("lang_features.csv", "a")
+			print 'lang_f'
+			f.write(author + ', ' + 'LANG_F' + ', ' + str(time) + ', ' + main_proj + ', ' + str(count_uses) + '\n')
+			f.close()
+			print 'wrote: -->', commit
+
+
 def calculate_metrics(author):
 	# getting the author's commits
 	out = bash('echo "'+ author + '" | ~/lookup/getValues a2c')
@@ -336,11 +388,12 @@ def calculate_metrics(author):
 	#print 'without diff time is ' + str(time2 - time1)
 	#calc_CI_diff(commits, author)
 	#print 'with is ' + str(current_time() - time2)
-	calc_test(commits, author)
+	#calc_test(commits, author)
+	calc_lang_features(commits, author)
 
 # checking whether the user provided the author
 if len(sys.argv) == 1:
 	sys.exit('No author provided')
 
 calculate_metrics(sys.argv[1])
-#calc_CI(['bfb1c6715b5b5698b599ab5e54e5c87d46128679'], sys.argv[1])
+
